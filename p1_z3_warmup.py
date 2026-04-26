@@ -15,8 +15,10 @@ def part_a():
     x, y, z = Ints('x y z')
     s = Solver()
 
-    # TODO: Add constraints
-    # s.add(...)
+    s.add(x + 2 * y == z)
+    s.add(z > 10)
+    s.add(x > 0)
+    s.add(y > 0)
 
     print("=== Part (a) ===")
     if s.check() == sat:
@@ -36,8 +38,9 @@ def part_b():
     x = Int('x')
     s = Solver()
 
-    # TODO: Add the *negation* of the formula and check UNSAT
-    # s.add(...)
+    # Negation of (x > 5 -> x > 3) is (x > 5 ∧ ¬(x > 3)) i.e. (x > 5 ∧ x <= 3).
+    # If this is UNSAT, the original implication is valid for all integers x.
+    s.add(And(x > 5, Not(x > 3)))
 
     print("=== Part (b) ===")
     result = s.check()
@@ -67,8 +70,9 @@ def part_c():
     f = Function('f', S, S)
     s = Solver()
 
-    # TODO: Add the three constraints
-    # s.add(...)
+    s.add(f(f(x)) == x)
+    s.add(f(f(f(x))) == x)
+    s.add(f(x) != x)
 
     print("=== Part (c) ===")
     result = s.check()
@@ -76,7 +80,53 @@ def part_c():
         print(f"SAT: {s.model()}")
     else:
         print("UNSAT")
-    # TODO: Add Z3 derivation steps below (see STEP 2 above).
+
+    # ---------------- STEP 2: Z3-driven derivation of WHY UNSAT ----------------
+    # The conjunction is UNSAT. Here is the chain of reasoning, each step
+    # encoded as an independent Z3 validity check (we assert the negation of
+    # the implication and expect UNSAT).
+    #
+    # Step (i):  Functions are congruent: a = b → f(a) = f(b). This is a
+    #            consequence of EUF (the theory of equality with uninterpreted
+    #            functions). We verify the special instance we need:
+    #              f(f(x)) = x  →  f(f(f(x))) = f(x)
+    #            i.e. apply f to both sides of f(f(x)) = x.
+    #
+    # Step (ii): Combine (i) with the second hypothesis f(f(f(x))) = x to
+    #            conclude f(x) = x:
+    #              f(f(x)) = x  ∧  f(f(f(x))) = x  →  f(x) = x
+    #
+    # Step (iii): Conclude UNSAT — the third hypothesis f(x) ≠ x directly
+    #             contradicts (ii):
+    #              f(f(x)) = x ∧ f(f(f(x))) = x ∧ f(x) ≠ x  is UNSAT.
+
+    def check_valid(name: str, hyp, conclusion):
+        v = Solver()
+        v.add(hyp)
+        v.add(Not(conclusion))
+        r = v.check()
+        verdict = "VALID" if r == unsat else f"INVALID ({r})"
+        print(f"  {name}: {verdict}")
+
+    print("  Z3 derivation of why the puzzle is UNSAT:")
+    # Step (i): congruence — apply f to both sides of f(f(x)) = x.
+    check_valid(
+        "(i)   f(f(x))=x  ⊢  f(f(f(x))) = f(x)",
+        f(f(x)) == x,
+        f(f(f(x))) == f(x),
+    )
+    # Step (ii): combine with f(f(f(x))) = x to derive f(x) = x.
+    check_valid(
+        "(ii)  f(f(x))=x ∧ f(f(f(x)))=x  ⊢  f(x) = x",
+        And(f(f(x)) == x, f(f(f(x))) == x),
+        f(x) == x,
+    )
+    # Step (iii): with f(x) ≠ x added, the whole conjunction implies False.
+    check_valid(
+        "(iii) f(f(x))=x ∧ f(f(f(x)))=x ∧ f(x)≠x  ⊢  False",
+        And(f(f(x)) == x, f(f(f(x))) == x, f(x) != x),
+        BoolVal(False),
+    )
     print()
 
 
@@ -96,20 +146,28 @@ def part_d():
 
     print("=== Part (d) ===")
 
-    # Axiom 1: Read-over-write HIT
+    # Axiom 1: Read-over-write HIT — negate and check UNSAT.
     s1 = Solver()
-    # TODO: Negate axiom 1 and check UNSAT
-    # s1.add(...)
+    s1.add(Not(Implies(i == j, Select(Store(a, i, v), j) == v)))
     r1 = s1.check()
     print(f"Axiom 1 (hit):  {'Valid' if r1 == unsat else 'INVALID'}")
 
-    # Axiom 2: Read-over-write MISS
+    # Axiom 2: Read-over-write MISS — negate and check UNSAT.
     s2 = Solver()
-    # TODO: Negate axiom 2 and check UNSAT
-    # s2.add(...)
+    s2.add(Not(Implies(i != j, Select(Store(a, i, v), j) == Select(a, j))))
     r2 = s2.check()
     print(f"Axiom 2 (miss): {'Valid' if r2 == unsat else 'INVALID'}")
     print()
+
+    # [EXPLAIN] Why are these two axioms together sufficient?
+    # Together the HIT and MISS axioms give a complete case analysis on the
+    # equality of i and j: for ANY query Select(Store(a, i, v), j) the index j
+    # either equals i (axiom 1 fixes the value to v) or it does not (axiom 2
+    # forces the result to agree with the original array a at j). Two arrays
+    # are equal iff they agree on every index, so these two axioms uniquely
+    # determine the array produced by Store and hence fully characterize the
+    # combined behavior of Select and Store — this is exactly McCarthy's
+    # extensional theory of arrays.
 
 
 # ---------------------------------------------------------------------------

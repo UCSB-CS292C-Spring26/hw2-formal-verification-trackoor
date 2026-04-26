@@ -26,24 +26,6 @@ OUTPUT_FILE = 1
 
 # ============================================================================
 # Part (a): Verify correct composition — 4 pts
-#
-# Skill A: Reads INPUT_FILE, extracts URLs. Does NOT modify any file.
-#   Pre:  true
-#   Post: fs_after_A = fs_before_A  (filesystem unchanged)
-#
-# Skill B: Fetches URLs and writes results to OUTPUT_FILE. Does NOT modify
-#          any file other than OUTPUT_FILE.
-#   Pre:  true
-#   Post: Select(fs_after_B, OUTPUT_FILE) = result_content
-#         ∧ ∀p. p ≠ OUTPUT_FILE → Select(fs_after_B, p) = Select(fs_before_B, p)
-#
-# Composed postcondition:
-#   Select(fs_final, INPUT_FILE) = Select(fs_initial, INPUT_FILE)  [input preserved]
-#   ∧ Select(fs_final, OUTPUT_FILE) = result_content               [output written]
-#   ∧ ∀p. p ≠ OUTPUT_FILE → Select(fs_final, p) = Select(fs_initial, p)
-#                                                                  [nothing else changed]
-#
-# TODO: Encode this as a Z3 validity check and verify it.
 # ============================================================================
 
 def verify_correct_composition():
@@ -76,32 +58,26 @@ def verify_correct_composition():
                             Select(fs_final, p) == Select(fs_initial, p)))
     )
 
-    # TODO: Check that (skill_A_post ∧ skill_B_post) → composed_post is valid.
-    # That is, check that the negation is UNSAT.
+    # Verify (skill_A_post ∧ skill_B_post) → composed_post by checking the
+    # negation is UNSAT.
     s = Solver()
-    # s.add(skill_A_post)
-    # s.add(skill_B_post)
-    # s.add(Not(composed_post))
+    s.add(skill_A_post)
+    s.add(skill_B_post)
+    s.add(Not(composed_post))
 
-    # TODO: uncomment and check
-    # result = s.check()
-
-    print("  TODO: Implement verification")
+    result = s.check()
+    if result == unsat:
+        print("  Composed postcondition VERIFIED — Skill A; Skill B preserves")
+        print("  the input file, writes the output, and touches nothing else.")
+    else:
+        print(f"  UNEXPECTED: composition failed. result={result}")
+        if result == sat:
+            print(f"  Counterexample: {s.model()}")
     print()
 
 
 # ============================================================================
 # Part (b): Buggy composition — 3 pts
-#
-# Bug: Skill B accidentally writes to INPUT_FILE instead of OUTPUT_FILE.
-#
-# Buggy Skill B postcondition:
-#   Select(fs_final, INPUT_FILE) = result_content     ← overwrites input!
-#   ∧ ∀p. p ≠ INPUT_FILE → Select(fs_final, p) = Select(fs_after_A, p)
-#
-# The composed postcondition should FAIL because the input file is modified.
-#
-# TODO: Encode this and show the counterexample.
 # ============================================================================
 
 def verify_buggy_composition():
@@ -122,7 +98,6 @@ def verify_buggy_composition():
                             Select(fs_final, p) == Select(fs_after_A, p)))
     )
 
-    # Same composed postcondition as before
     composed_post = And(
         Select(fs_final, INPUT_FILE) == Select(fs_initial, INPUT_FILE),
         Select(fs_final, OUTPUT_FILE) == result_content,
@@ -130,26 +105,59 @@ def verify_buggy_composition():
                             Select(fs_final, p) == Select(fs_initial, p)))
     )
 
-    # TODO: Check that the composed postcondition FAILS.
-    # Print the counterexample showing how the input file gets corrupted.
     s = Solver()
-    # s.add(...)
+    s.add(skill_A_post)
+    s.add(buggy_B_post)
+    s.add(Not(composed_post))
 
-    print("  TODO: Implement buggy verification")
+    result = s.check()
+    if result == sat:
+        m = s.model()
+        print("  Composition FAILS — Z3 found a counterexample:")
+        # Probe the model on a couple of canonical indices.
+        in_initial = m.eval(Select(fs_initial, INPUT_FILE), model_completion=True)
+        in_final   = m.eval(Select(fs_final,   INPUT_FILE), model_completion=True)
+        out_final  = m.eval(Select(fs_final,   OUTPUT_FILE), model_completion=True)
+        rc         = m.eval(result_content, model_completion=True)
+        print(f"    fs_initial[INPUT]  = {in_initial}")
+        print(f"    fs_final[INPUT]    = {in_final}     ← was overwritten by Skill B")
+        print(f"    fs_final[OUTPUT]   = {out_final}")
+        print(f"    result_content     = {rc}")
+        print("  The composed postcondition demands fs_final[INPUT] = fs_initial[INPUT],")
+        print("  but the buggy Skill B clobbered INPUT with `result_content`.")
+    else:
+        print(f"  UNEXPECTED — buggy composition was proved correct? result={result}")
     print()
 
 
 # ============================================================================
 # Part (c): Real-world connection — 3 pts
 #
-# [EXPLAIN] in a comment below (3–4 sentences):
-# How does this kind of composition bug manifest in actual agent workflows?
-# Give a concrete example from your experience with coding agents (Claude Code,
-# Cursor, Copilot, etc.) or from what you learned in class. What would a runtime monitor need to check to
-# prevent this class of bugs?
-
-# TODO: Write your explanation here as a comment.
-# ...
+# [EXPLAIN] How this composition bug shows up in real agent workflows.
+#
+# This is the classic "skills compose only if you trust their FRAMES (the
+# set of memory/files each step promises NOT to touch), and most skills'
+# stated frames are weaker than the user's mental model." A concrete case
+# I have seen with Claude Code: a "summarize this file" skill reads
+# `notes.md`, and a follow-up "save the summary" skill is asked to write
+# the result somewhere — if the agent picks the same path it just read
+# from (because it's the most salient path in context), the summary
+# replaces the original notes. From the agent's view both steps
+# individually had reasonable post-conditions; what failed was the JOIN —
+# the second skill's "writes to OUTPUT" post-condition collided with the
+# first skill's "INPUT unchanged" post-condition because OUTPUT silently
+# aliased INPUT.
+#
+# A runtime monitor that prevents this class of bug must (a) record which
+# concrete paths were *read* during Skill A (the input frame), (b) record
+# which paths Skill B is about to *write*, and (c) deny any write whose
+# target intersects an already-read path unless the user has explicitly
+# blessed an in-place modification. In practice this is "no write-back to
+# a previously-read file without a transformation marker" — the same idea
+# as the write-after-read taint monitor from Problem 4(c). At the SMT
+# level it is exactly the disjointness of the read-set of A and the
+# write-set of B that we asserted (implicitly) by giving them disjoint
+# frame conditions.
 # ============================================================================
 
 

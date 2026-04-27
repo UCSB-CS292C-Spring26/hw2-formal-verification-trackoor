@@ -499,16 +499,18 @@ def test_wp_derivation():
         ("x >= -1", z3_var('x') >= -1),
         ("x == -1", z3_var('x') == -1),
     ]
+    # We check validity of (pre → wp) by asking Z3 for SAT of its negation.
+    # SAT  → counterexample exists → pre is NOT a valid precondition.
+    # UNSAT → no counterexample → pre IS a valid precondition.
     for name, pre in candidates:
         s = Solver()
         s.add(Not(Implies(pre, wp_result)))
         result = s.check()
-        valid = (result == unsat)
-        if valid:
-            print(f"  {name}: VALID precondition")
+        if result == unsat:
+            print(f"  {name}: {result} (¬(pre→wp) UNSAT)  → VALID precondition")
         else:
             m = s.model()
-            print(f"  {name}: INVALID precondition — counterexample: {m}")
+            print(f"  {name}: {result} (¬(pre→wp) SAT)    → INVALID — counterexample: {m}")
 
     # [EXPLAIN] precondition results:
     # • {x >= 0}  is VALID. Then x' = x+1 >= 1 > 0, so we take the 'then'
